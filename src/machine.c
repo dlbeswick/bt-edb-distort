@@ -195,6 +195,8 @@ static gboolean set_caps(
 
   GST_INFO("caps_src %p", caps_src);
 
+  // Renegotiate caps if distort's output rate doesn't match the target resampling rate, compared to the rate of
+  // the upstream source. See query_distort_sink; there should be a better way.
   if (caps_src) {
     gint rate_convert_in_src;
     gboolean ret = gst_structure_get_int(gst_caps_get_structure(caps_src, 0), "rate", &rate_convert_in_src);
@@ -217,24 +219,39 @@ static gboolean set_caps(
   return TRUE;
 }
 
+/*
+  This callback is attached to the "sink" pad of the internal Distort effect.
+  It's called at the start of playback, when GStreamer is figuring out how to fixate caps for all the machines.
+
+  What the code is aiming to do is to figure out what rate has been decided for the src pad of the upstream
+  (audioresample), and then fixing the rate of its own sink pad to the target oversampling rate.
+  
+  It will be called both when caps have been fixed on the downstream audioresample's pad and when it hasn't. Nothing
+  is done if caps haven't been fixed there, yet.
+
+  What seems to happen is that one round of negotiation is done where upstream caps aren't available, then distort's
+  "set_caps" function calls for a renegotiate if a rate change is still required, then this will be called again with
+  current caps available. But there must be a way to avoid the renegotiate? I had trouble hooking "event" and "query"
+  handlers to audioresample.
+ */
 static gboolean query_distort_sink(GstPad *pad, GstObject* parent, GstQuery* query) {
   BtEdbDistortInternal* self = (BtEdbDistortInternal*)parent;
   
   switch(GST_QUERY_TYPE (query)) {
   case GST_QUERY_CAPS: {
     // Note: parent is BtEdbDistort
-    GstPad* convert_out_src = gst_element_get_static_pad(self->convert_out, "src");
-    GstCaps* caps_convert_out_src = gst_pad_get_current_caps(convert_out_src);
+    GstPad* convert_in_src = gst_element_get_static_pad(self->convert_in, "sink");
+    GstCaps* caps_convert_in_src = gst_pad_get_current_caps(convert_in_src);
     GstCaps* caps_sink = gst_caps_make_writable(gst_pad_get_pad_template_caps(pad));
 
     GST_INFO("query sink %s", gst_caps_to_string(caps_sink));
-    GST_INFO("query convert_out_src %s", gst_caps_to_string(caps_convert_out_src));
+    GST_INFO("query convert_in_src %s", gst_caps_to_string(caps_convert_in_src));
 
-    if (caps_convert_out_src) {
+    if (caps_convert_in_src) {
       gint out_rate;
-      gst_structure_get_int(gst_caps_get_structure(caps_convert_out_src, 0), "rate", &out_rate);
-      gst_caps_unref(caps_convert_out_src);
-      caps_convert_out_src = 0;
+      gst_structure_get_int(gst_caps_get_structure(caps_convert_in_src, 0), "rate", &out_rate);
+      gst_caps_unref(caps_convert_in_src);
+      caps_convert_in_src = 0;
 
       GST_INFO("convert_out_src rate %d", out_rate);
     
