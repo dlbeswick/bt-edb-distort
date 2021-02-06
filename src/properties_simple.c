@@ -112,10 +112,6 @@ void btedb_properties_simple_add(BtEdbPropertiesSimple* self, const char* prop_n
 void btedb_properties_simple_finalize(GObject* const obj) {
   BtEdbPropertiesSimple* const self = (BtEdbPropertiesSimple*)obj;
   
-  for (guint i = 0; i < self->props->len; ++i) {
-    PspecVar* const pspec_var = &g_array_index(self->props, PspecVar, i);
-    g_clear_object(&pspec_var->pspec);
-  }
   g_array_unref(self->props);
   
   G_OBJECT_CLASS(btedb_properties_simple_parent_class)->finalize(obj);
