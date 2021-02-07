@@ -1,5 +1,5 @@
 /*
-  Waveshaper effect for Buzztrax
+  Distort effect for Buzztrax
   Copyright (C) 2020 David Beswick
 
   This program is free software: you can redistribute it and/or modify
@@ -20,15 +20,15 @@
 
 #include <glib-object.h>
 
+typedef struct _BtEdbPropertiesSimple BtEdbPropertiesSimple;
+
 /*
   This class helps with avoiding some repetitive code around properties setting.
 */
-G_DECLARE_FINAL_TYPE(BtEdbPropertiesSimple, btedb_properties_simple, BTEDB, PROPERTIES_SIMPLE, GObject);
-
 BtEdbPropertiesSimple* btedb_properties_simple_new(GObject* owner);
+void btedb_properties_simple_free(BtEdbPropertiesSimple* self);
 
 void btedb_properties_simple_add(BtEdbPropertiesSimple* self, const char* prop_name, void* var);
-
 gboolean btedb_properties_simple_get(const BtEdbPropertiesSimple* self, GParamSpec* pspec, GValue* value);
 gboolean btedb_properties_simple_set(const BtEdbPropertiesSimple* self, GParamSpec* pspec, const GValue* value);
 

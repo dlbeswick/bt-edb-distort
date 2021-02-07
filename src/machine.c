@@ -35,8 +35,8 @@ G_DECLARE_FINAL_TYPE(BtEdbDistort, btedb_distort, BTEDB, DISTORT, GstBin);
 struct _BtEdbDistortInternal {
   GstBaseTransform parent;
 
-  GstElement* convert_in;
-  GstElement* convert_out;
+  GstElement* resample_in;
+  GstElement* resample_out;
 
   guint oversample;
   gfloat pos_db_pregain;
@@ -61,8 +61,8 @@ struct _BtEdbDistort {
   GstBin parent;
 
   BtEdbDistortInternal* distort;
-  GstElement* convert_in;
-  GstElement* convert_out;
+  GstElement* resample_in;
+  GstElement* resample_out;
   BtEdbPropertiesSimple* props;
 };
 
@@ -115,6 +115,7 @@ static gfloat db_to_gain(gfloat db) {
 
 static void set_property (GObject* object, guint prop_id, const GValue* value, GParamSpec* pspec) {
   BtEdbDistort* self = (BtEdbDistort*)object;
+  g_assert(self->props);
   btedb_properties_simple_set(self->props, pspec, value);
 }
 
@@ -167,7 +168,7 @@ static GstFlowReturn transform_ip(GstBaseTransform* baset, GstBuffer* gstbuf) {
   self->perf_time += (clock_end.tv_sec - clock_start.tv_sec) * 1e9L + (clock_end.tv_nsec - clock_start.tv_nsec);
   self->perf_samples += nsamples;
   if (self->perf_time >= 1e8f) {
-    GST_INFO("Avg perf: %f samples/sec\n", self->perf_samples / (self->perf_time / 1e9f));
+    GST_DEBUG("Avg perf: %f samples/sec\n", self->perf_samples / (self->perf_time / 1e9f));
     self->perf_time = 0;
     self->perf_samples = 0;
   }
@@ -184,8 +185,8 @@ static gboolean set_caps(
   GstCaps* incaps,
   GstCaps* outcaps) {
 
-  GST_INFO("incaps %s", gst_caps_to_string(incaps));
-  GST_INFO("outcaps %s", gst_caps_to_string(outcaps));
+  GST_DEBUG_OBJECT(trans, "incaps %s", gst_caps_to_string(incaps));
+  GST_DEBUG_OBJECT(trans, "outcaps %s", gst_caps_to_string(outcaps));
 
   return TRUE;
 }
@@ -200,15 +201,24 @@ static gboolean set_caps(
   Then, there are caps with fixed and non-fixed structures as more information comes from upstream.
   At this point, "distort" can fix its own caps which will determine the oversampling rate from audioconvert.
  */
-static gboolean query_distort_sink(GstPad *pad, GstObject* parent, GstQuery* query) {
+static gboolean query_distort_sink(GstPad* pad, GstObject* parent, GstQuery* query) {
   BtEdbDistortInternal* self = (BtEdbDistortInternal*)parent;
   
   switch(GST_QUERY_TYPE (query)) {
   case GST_QUERY_CAPS: {
+    gboolean result = FALSE;
     GstCaps* caps_in;
+    
     gst_query_parse_caps(query, &caps_in);
-    GST_INFO("query caps_in %s", gst_caps_to_string(caps_in));
+    GST_DEBUG_OBJECT(parent, "query caps_in %s", gst_caps_to_string(caps_in));
 
+    GstCaps* caps_sink = gst_pad_get_current_caps(pad);
+    GST_DEBUG_OBJECT(parent, "query caps_sink %s", gst_caps_to_string(caps_sink));
+
+    GstPad* pad_src = gst_element_get_static_pad((GstElement*)parent, "src");
+    GstCaps* caps_src = gst_pad_get_current_caps(pad_src);
+    GST_DEBUG_OBJECT(parent, "query caps_src %s", gst_caps_to_string(caps_src));
+    
     // If there are no caps in the query, then there is no information on which to act.
     // If the incoming caps are already fixed, then the final oversampled rate has already been presented upstream
     // and there is nothing to do.
@@ -223,16 +233,28 @@ static gboolean query_distort_sink(GstPad *pad, GstObject* parent, GstQuery* que
 
         int rate;
         if (gst_structure_get_int(structure, "rate", &rate)) {
+          GST_DEBUG_OBJECT(parent, "query fixed caps_in rate is %d in structure idx %d", rate, i);
+          GST_DEBUG_OBJECT(parent, "query oversample factor is %d", self->oversample);
+
+          g_assert(self->oversample != 0);
+          
           GstCaps* caps_out = gst_caps_copy_nth(caps_in, i);
+          GST_DEBUG_OBJECT(parent, "query caps_out before %s", gst_caps_to_string(caps_out));
           gst_structure_set(gst_caps_get_structure(caps_out, 0), "rate", G_TYPE_INT, rate * self->oversample, NULL);
-          GST_INFO("query caps_out %s", gst_caps_to_string(caps_out));
+          GST_DEBUG_OBJECT(parent, "query caps_out %s", gst_caps_to_string(caps_out));
           gst_query_set_caps_result(query, caps_out);
-          return TRUE;
+          gst_caps_unref(caps_out);
+          result = TRUE;
         }
       }
+    } else {
+      result = gst_pad_query_default(pad, parent, query);
     }
-    
-    return gst_pad_query_default(pad, parent, query);
+
+    if (caps_sink) gst_caps_unref(caps_sink);
+    if (caps_src) gst_caps_unref(caps_src);
+    gst_clear_object(&pad_src);
+    return result;
   }
   default:
     return gst_pad_query_default(pad, parent, query);
@@ -241,7 +263,8 @@ static gboolean query_distort_sink(GstPad *pad, GstObject* parent, GstQuery* que
 
 static void dispose(GObject* object) {
   BtEdbDistort* self = (BtEdbDistort*)object;
-  g_clear_object(&self->props);
+  btedb_properties_simple_free(self->props);
+  self->props = 0;
 }
 
 static void btedb_distort_internal_class_init(BtEdbDistortInternalClass* const klass) {
@@ -271,8 +294,9 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
     aclass->get_property = get_property;
     aclass->dispose = dispose;
 
+    // Note: variables will not be set to default values unless G_PARAM_CONSTRUCT is given.
     const GParamFlags flags =
-      (GParamFlags)(G_PARAM_READWRITE | GST_PARAM_CONTROLLABLE | G_PARAM_STATIC_STRINGS);
+      (GParamFlags)(G_PARAM_READWRITE | GST_PARAM_CONTROLLABLE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
 
     guint idx = 1;
     g_object_class_install_property(
@@ -293,7 +317,7 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
 
     g_object_class_install_property(
       aclass, idx++,
-      g_param_spec_float("pos-exponent", "+ve Exp", "Positive Exponent", 0, 10, 1, flags));
+      g_param_spec_float("pos-exponent", "+ve Exp", "Positive Exponent", 0, 10, 0.5, flags));
 
     g_object_class_install_property(
       aclass, idx++,
@@ -348,21 +372,21 @@ static void btedb_distort_init(BtEdbDistort* const self) {
   btedb_properties_simple_add(self->props, "db-postgain", &self->distort->db_postgain);
 
   // GST_AUDIO_RESAMPLER_FILTER_MODE_FULL is fastest, but uses the most memory.
-  self->convert_in = gst_element_factory_make ("audioresample", NULL);
-  g_object_set(self->convert_in, "sinc-filter-mode", GST_AUDIO_RESAMPLER_FILTER_MODE_FULL, NULL);
-  self->convert_out = gst_element_factory_make ("audioresample", NULL);
-  g_object_set(self->convert_out, "sinc-filter-mode", GST_AUDIO_RESAMPLER_FILTER_MODE_FULL, NULL);
+  self->resample_in = gst_element_factory_make("audioresample", NULL);
+  g_object_set(self->resample_in, "sinc-filter-mode", GST_AUDIO_RESAMPLER_FILTER_MODE_FULL, NULL);
+  self->resample_out = gst_element_factory_make("audioresample", NULL);
+  g_object_set(self->resample_out, "sinc-filter-mode", GST_AUDIO_RESAMPLER_FILTER_MODE_FULL, NULL);
 
-  self->distort->convert_in = self->convert_in;
-  self->distort->convert_out = self->convert_out;
+  self->distort->resample_in = self->resample_in;
+  self->distort->resample_out = self->resample_out;
   
-  gst_bin_add_many(GST_BIN(self), self->convert_in, (GstElement*)self->distort, self->convert_out, NULL);
+  gst_bin_add_many(GST_BIN(self), self->resample_in, (GstElement*)self->distort, self->resample_out, NULL);
 
-  gst_element_link(self->convert_in, (GstElement*)self->distort);
-  gst_element_link((GstElement*)self->distort, self->convert_out);
+  gst_element_link(self->resample_in, (GstElement*)self->distort);
+  gst_element_link((GstElement*)self->distort, self->resample_out);
 
   {
-    GstPad* pad = gst_element_get_static_pad(self->convert_in, "sink");
+    GstPad* pad = gst_element_get_static_pad(self->resample_in, "sink");
     GstPad* ghost = gst_ghost_pad_new("sink", pad);
     gst_element_add_pad((GstElement*)self, ghost);
     gst_object_unref(pad);
@@ -375,7 +399,7 @@ static void btedb_distort_init(BtEdbDistort* const self) {
   }
   
   {
-    GstPad* pad = gst_element_get_static_pad(self->convert_out, "src");
+    GstPad* pad = gst_element_get_static_pad(self->resample_out, "src");
     GstPad* ghost = gst_ghost_pad_new("src", pad);
     gst_element_add_pad((GstElement*)self, ghost);
     gst_object_unref(pad);
