@@ -301,7 +301,7 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
     guint idx = 1;
     g_object_class_install_property(
       aclass, idx++,
-      g_param_spec_uint("oversample", "Oversample", "Oversample", 1, 64, 8, flags ^ GST_PARAM_CONTROLLABLE));
+      g_param_spec_uint("oversample", "Oversample", "Oversample", 1, 64, 2, flags ^ GST_PARAM_CONTROLLABLE));
     
     g_object_class_install_property(
       aclass, idx++,
