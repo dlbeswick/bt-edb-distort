@@ -68,6 +68,8 @@ struct _BtEdbDistort {
 
 G_DEFINE_TYPE(BtEdbDistort, btedb_distort, GST_TYPE_BIN);
 
+static guint signal_bml_gfx_changed;
+
 static gboolean plugin_init(GstPlugin* plugin) {
   GST_DEBUG_CATEGORY_INIT(
     GST_CAT_DEFAULT,
@@ -113,10 +115,61 @@ static gfloat db_to_gain(gfloat db) {
   return powf(10.0f, db / 20.0f);
 }
 
+static inline void distort(BtEdbDistortInternal* const self, gfloat* data, guint nsamples) {
+  const gfloat pos_pregain = db_to_gain(self->pos_db_pregain);
+  const gfloat neg_pregain = db_to_gain(self->neg_db_pregain);
+  const gfloat postgain = db_to_gain(self->db_postgain);
+
+  for (int i = 0; i < nsamples; i++) {
+    const gboolean negative = data[i] < 0;
+    const gboolean use_pos_values = self->symmetric || !negative;
+    const gfloat exponent = use_pos_values ? self->pos_exponent : self->neg_exponent;
+    const gfloat pregain = use_pos_values ? pos_pregain : neg_pregain;
+    const gfloat scale = use_pos_values ? self->pos_scale : self->neg_scale;
+    const gfloat bias = use_pos_values ? self->pos_bias : self->neg_bias;
+
+    // pregain:1;bias:-1;scale:1;exponent:1;plot2d(1/(1 + exp(-((abs(x*pregain)**exponent + bias))*scale)),[x,-10,10]);
+//    data[i] = 1.f/(1 + expf(-powf(fabs(data[i]*pregain), exponent)*scale + bias)) * postgain;
+//    data[i] = 1.f/(1 + expf(-(powf(fabs(data[i]*pregain), exponent) + bias)*scale)) * postgain;
+
+    data[i] = (1-exp(-fabs(data[i] * pregain)/exponent)) * postgain;
+
+    if (negative)
+      data[i] *= -1;
+  }
+}
+
 static void set_property (GObject* object, guint prop_id, const GValue* value, GParamSpec* pspec) {
   BtEdbDistort* self = (BtEdbDistort*)object;
   g_assert(self->props);
   btedb_properties_simple_set(self->props, pspec, value);
+
+  const int width = 128;
+  const int height = 128;
+  gfloat data_in[width];
+  u_int32_t gfx[width*height];
+
+  for (int i = 0; i < width*height; ++i) {
+    gfx[i] = 0xFF000000;
+  }
+
+  for (int i = 0; i < width; ++i) {
+    data_in[i] = -1.0f + 2 * ((gfloat)i/width);
+  }
+
+  distort(self->distort, data_in, width);
+  
+  for (int i = 1; i < width; ++i) {
+    const gfloat val0 = 1.0f - ((data_in[i-1] + 1) / 2);
+    const gfloat val1 = 1.0f - ((data_in[i] + 1) / 2);
+    const guint y0 = MAX(MIN((gint)(val0 * (height-1)), height-1), 0);
+    const guint y1 = MAX(MIN((gint)(val1 * (height-1)), height-1), 0);
+    for (int y = MIN(y0,y1); y <= MAX(y0,y1); ++y) {
+      gfx[i + width * y] = 0xFFFFFFFF;
+    }
+  }
+  
+  g_signal_emit(object, signal_bml_gfx_changed, 0, width, height, g_bytes_new(gfx, sizeof(gfx)));
 }
 
 static void get_property (GObject * object, guint prop_id, GValue * value, GParamSpec * pspec) {
@@ -142,24 +195,8 @@ static GstFlowReturn transform_ip(GstBaseTransform* baset, GstBuffer* gstbuf) {
   }
 
   gfloat* data = (gfloat*)info.data;
-  const guint nsamples = info.size / sizeof(typeof(*data));
-  const gfloat pos_pregain = db_to_gain(self->pos_db_pregain);
-  const gfloat neg_pregain = db_to_gain(self->neg_db_pregain);
-  const gfloat postgain = db_to_gain(self->db_postgain);
-
-  for (int i = 0; i < nsamples; i++) {
-    const gboolean negative = data[i] < 0;
-    const gboolean use_pos_values = self->symmetric || !negative;
-    const gfloat exponent = use_pos_values ? self->pos_exponent : self->neg_exponent;
-    const gfloat pregain = use_pos_values ? pos_pregain : neg_pregain;
-    const gfloat scale = use_pos_values ? self->pos_scale : self->neg_scale;
-    const gfloat bias = use_pos_values ? self->pos_bias : self->neg_bias;
-    
-    data[i] = 1.f/(1 + expf(-powf(fabs(data[i]*pregain), exponent)*scale + bias)) * postgain;
-    
-    if (negative)
-      data[i] *= -1;
-  }
+  guint nsamples = info.size / sizeof(typeof(*data));
+  distort(self, data, nsamples);
    
   gst_buffer_unmap (gstbuf, &info);
 
@@ -317,7 +354,7 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
 
     g_object_class_install_property(
       aclass, idx++,
-      g_param_spec_float("pos-exponent", "+ve Exp", "Positive Exponent", 0, 10, 0.5, flags));
+      g_param_spec_float("pos-exponent", "+ve Exp", "Positive Exponent", 0, 10, 1, flags));
 
     g_object_class_install_property(
       aclass, idx++,
@@ -342,6 +379,22 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
     g_object_class_install_property(
       aclass, idx++,
       g_param_spec_float("db-postgain", "Postgain dB", "Postgain dB", -144, 144, 0, flags));
+
+    signal_bml_gfx_changed = 
+      g_signal_new (
+        "bml-gfx-changed",
+        G_TYPE_FROM_CLASS (aclass),
+        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+        0 /* offset */,
+        NULL /* accumulator */,
+        NULL /* accumulator data */,
+        NULL /* C marshaller */,
+        G_TYPE_NONE /* return_type */,
+        3     /* n_params */,
+        G_TYPE_UINT /* param width */,
+        G_TYPE_UINT /* param height */,
+        G_TYPE_BYTES /* param data */
+        );
   }
 
   {
