@@ -68,7 +68,7 @@ struct _BtEdbDistort {
 
 G_DEFINE_TYPE(BtEdbDistort, btedb_distort, GST_TYPE_BIN);
 
-static guint signal_bml_gfx_changed;
+static guint signal_bt_gfx_changed;
 
 static gboolean plugin_init(GstPlugin* plugin) {
   GST_DEBUG_CATEGORY_INIT(
@@ -166,7 +166,7 @@ static void update_gfx(BtEdbDistort* self, void* callback) {
     }
   }
   
-  g_signal_emit(self, signal_bml_gfx_changed, 0, width, height, g_bytes_new(gfx, sizeof(gfx)));
+  g_signal_emit(self, signal_bt_gfx_changed, 0, width, height, g_bytes_new(gfx, sizeof(gfx)));
 }
 
 static void set_property (GObject* object, guint prop_id, const GValue* value, GParamSpec* pspec) {
@@ -311,11 +311,6 @@ static void btedb_distort_internal_class_init(BtEdbDistortInternalClass* const k
 
     gst_element_class_add_pad_template(aclass, gst_static_pad_template_get(&src_template));
     gst_element_class_add_pad_template(aclass, gst_static_pad_template_get(&sink_template));
-    
-    // TBD: docs
-    /*gst_element_class_add_metadata (element_class, GST_ELEMENT_METADATA_DOC_URI,
-    "file://" DATADIR "" G_DIR_SEPARATOR_S "gtk-doc" G_DIR_SEPARATOR_S "html"
-    G_DIR_SEPARATOR_S "" PACKAGE "-gst" G_DIR_SEPARATOR_S "GstBtSimSyn.html");*/
   }
 
   {
@@ -381,9 +376,9 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
       aclass, idx++,
       g_param_spec_float("db-postgain", "Postgain dB", "Postgain dB", -144, 144, 0, flags));
 
-    signal_bml_gfx_changed = 
+    signal_bt_gfx_changed = 
       g_signal_new (
-        "bml-gfx-changed",
+        "bt-gfx-changed",
         G_TYPE_FROM_CLASS (aclass),
         G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
         0 /* offset */,
@@ -398,7 +393,7 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
         );
 
       g_signal_new (
-        "bml-gfx-refresh",
+        "bt-gfx-refresh",
         G_TYPE_FROM_CLASS (aclass),
         G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
         0 /* offset */,
@@ -417,6 +412,11 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
       GST_MACHINE_CATEGORY,
       GST_MACHINE_DESC,
       PACKAGE_BUGREPORT);
+
+    gst_element_class_add_metadata (
+      aclass,
+      GST_ELEMENT_METADATA_DOC_URI,
+      "file://" DATADIR "" G_DIR_SEPARATOR_S "Gear" G_DIR_SEPARATOR_S "" PACKAGE ".html");
   }
 }
 
@@ -470,5 +470,5 @@ static void btedb_distort_init(BtEdbDistort* const self) {
     gst_object_unref(pad);
   }
 
-  g_signal_connect (self, "bml-gfx-refresh", G_CALLBACK (update_gfx), 0);
+  g_signal_connect (self, "bt-gfx-refresh", G_CALLBACK (update_gfx), 0);
 }

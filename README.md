@@ -1,14 +1,14 @@
 # Overview
 
-Distortion via a sigmoid function, with optional oversampling.
+Distortion via an exponential function, with optional oversampling.
 
 The equation is:
 
-	y' = 1 / (1 + e**(-abs(y*pregain)**exponent * scale + bias)) * postgain
+	y' = (1 - exp(-abs(data_abs * pregain) / plerp(shape0, shape1, data_abs, shape_exp))) * postgain
 
-The function can be hard to visualise. Try putting this into Maxima:
+This is inspired by the capacitor discharge voltage equation.
 
-	plot2d(1 / (1 + %e**(-abs(y)**0.25 * 20 + 17)),[y,-1,1]);
+`plerp` is a linear interpolation with exponentiation applied to the alpha value, to make the curve a little more interesting.
 
 # Building
 
@@ -37,17 +37,13 @@ is applied to the output rate of the effect, i.e. if downstream requests 44.1khz
 
 Gain in dB applied before distortion when the input signal is above zero (Positive Pregain) or below zero (Negative Pregain).
 
-### Scale
+### Shape A/B
 
-Has the effect of making the duration of the sigmoid's transition longer or shorter.
+These parameters are called "shape" because they affect the distortion curve. These A and B values define two curves, and there is an interpolation applied between them as the input value increases.
 
-### Bias
+### Shape exp
 
-Offsets the sigmoid to the left or right. Good starting values are half of `Scale`.
-
-### Exp
-
-Exponentiation applied to the absolute value of the input signal. Has the effect of making the sigmoid's transition smoother (values < 0) or sharper.
+The exponent applied to the alpha value that interpolates between the two shapes.
 
 ### Symmetric?
 

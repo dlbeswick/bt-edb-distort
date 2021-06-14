@@ -1,4 +1,5 @@
 ACLOCAL_AMFLAGS = -I m4
+AM_CPPFLAGS = -DDATADIR=\"$(datadir)\"
 
 SRC = src/machine.c src/properties_simple.c
 
@@ -13,6 +14,9 @@ libbt_edb_distort_la_LDFLAGS = $(PKGCONFIG_DEPS_LIBS) -module -avoid-version
 # Remove 'la' file as the generated lib isn't intended to be linked with others.
 install-data-hook:
 	$(RM) $(DESTDIR)$(plugindir)/libbt_edb_distort.la
-#	$(LN_S) -f TBD.html  $(DESTDIR)$(userdocdir)/TBD.html
 
-#userdoc_DATA = TBD.html
+userdoc_DATA = bt_edb_distort.html
+
+bt_edb_distort.html: $(top_srcdir)/README.md
+	kramdown < $< > $@
+
