@@ -40,10 +40,14 @@ struct _BtEdbDistortInternal {
 
   guint oversample;
   gfloat pos_db_pregain;
-  gfloat pos_exponent;
+  gfloat pos_shape_a;
+  gfloat pos_shape_b;
+  gfloat pos_shape_exp;
   gboolean symmetric;
   gfloat neg_db_pregain;
-  gfloat neg_exponent;
+  gfloat neg_shape_a;
+  gfloat neg_shape_b;
+  gfloat neg_shape_exp;
   gfloat db_postgain;
   
   gint perf_samples;
@@ -111,6 +115,10 @@ static gfloat db_to_gain(gfloat db) {
   return powf(10.0f, db / 20.0f);
 }
 
+static inline gfloat plerp(gfloat a, gfloat b, gfloat alpha, gfloat power) {
+  return powf(a + (b-a) * MAX(MIN(alpha,1),0), power);
+}
+
 static inline void distort(BtEdbDistortInternal* const self, gfloat* data, guint nsamples) {
   const gfloat pos_pregain = db_to_gain(self->pos_db_pregain);
   const gfloat neg_pregain = db_to_gain(self->neg_db_pregain);
@@ -119,10 +127,13 @@ static inline void distort(BtEdbDistortInternal* const self, gfloat* data, guint
   for (int i = 0; i < nsamples; i++) {
     const gboolean negative = data[i] < 0;
     const gboolean use_pos_values = self->symmetric || !negative;
-    const gfloat exponent = use_pos_values ? self->pos_exponent : self->neg_exponent;
+    const gfloat shape0 = use_pos_values ? self->pos_shape_a : self->neg_shape_a;
+    const gfloat shape1 = use_pos_values ? self->pos_shape_b : self->neg_shape_b;
+    const gfloat shape_exp = use_pos_values ? self->pos_shape_exp : self->neg_shape_exp;
     const gfloat pregain = use_pos_values ? pos_pregain : neg_pregain;
 
-    data[i] = (1-exp(-fabs(data[i] * pregain)/exponent)) * postgain;
+    const gfloat data_abs = fabs(data[i]);
+    data[i] = (1-exp(-fabs(data_abs * pregain)/plerp(shape0, shape1, data_abs, shape_exp))) * postgain;
 
     if (negative)
       data[i] *= -1;
@@ -169,10 +180,6 @@ static void set_property (GObject* object, guint prop_id, const GValue* value, G
 static void get_property (GObject * object, guint prop_id, GValue * value, GParamSpec * pspec) {
   BtEdbDistort* self = (BtEdbDistort*)object;
   btedb_properties_simple_get(self->props, pspec, value);
-}
-
-static inline gfloat plerp(gfloat a, gfloat b, gfloat alpha, gfloat power) {
-  return powf(a + (b-a) * MAX(MIN(alpha,1),0), power);
 }
 
 static GstFlowReturn transform_ip(GstBaseTransform* baset, GstBuffer* gstbuf) {
@@ -340,8 +347,16 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
 
     g_object_class_install_property(
       aclass, idx++,
-      g_param_spec_float("pos-exponent", "+ve Exp", "Positive Exponent", 0, 10, 1, flags));
+      g_param_spec_float("pos-shape-a", "+ve Shape A", "Positive Shape Interp Point A", 0, 10, 1, flags));
 
+    g_object_class_install_property(
+      aclass, idx++,
+      g_param_spec_float("pos-shape-b", "+ve Shape B", "Positive Shape Interp Point B", 0, 10, 1, flags));
+
+    g_object_class_install_property(
+      aclass, idx++,
+      g_param_spec_float("pos-shape-exp", "+ve Shape Exp", "Positive Shape Interp Point Exponent", 0, 10, 1, flags));
+    
     g_object_class_install_property(
       aclass, idx++,
       g_param_spec_boolean("symmetric", "Symmetric?", "Symmetric? (Use +ve values for -ve)", TRUE, flags));
@@ -352,8 +367,16 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
 
     g_object_class_install_property(
       aclass, idx++,
-      g_param_spec_float("neg-exponent", "-ve Exp", "Negative Exponent", 0, 10, 1, flags));
+      g_param_spec_float("neg-shape-a", "-ve Shape A", "Negative Shape Interp Point A", 0, 10, 1, flags));
 
+    g_object_class_install_property(
+      aclass, idx++,
+      g_param_spec_float("neg-shape-b", "-ve Shape B", "Negative Shape Interp Point B", 0, 10, 1, flags));
+    
+    g_object_class_install_property(
+      aclass, idx++,
+      g_param_spec_float("neg-shape-exp", "-ve Shape Exp", "Negative Shape Interp Point Exponent", 0, 10, 1, flags));
+    
     g_object_class_install_property(
       aclass, idx++,
       g_param_spec_float("db-postgain", "Postgain dB", "Postgain dB", -144, 144, 0, flags));
@@ -403,10 +426,14 @@ static void btedb_distort_init(BtEdbDistort* const self) {
   self->props = btedb_properties_simple_new((GObject*)self);
   btedb_properties_simple_add(self->props, "oversample", &self->distort->oversample);
   btedb_properties_simple_add(self->props, "pos-db-pregain", &self->distort->pos_db_pregain);
-  btedb_properties_simple_add(self->props, "pos-exponent", &self->distort->pos_exponent);
+  btedb_properties_simple_add(self->props, "pos-shape-a", &self->distort->pos_shape_a);
+  btedb_properties_simple_add(self->props, "pos-shape-b", &self->distort->pos_shape_b);
+  btedb_properties_simple_add(self->props, "pos-shape-exp", &self->distort->pos_shape_exp);
   btedb_properties_simple_add(self->props, "symmetric", &self->distort->symmetric);
   btedb_properties_simple_add(self->props, "neg-db-pregain", &self->distort->neg_db_pregain);
-  btedb_properties_simple_add(self->props, "neg-exponent", &self->distort->neg_exponent);
+  btedb_properties_simple_add(self->props, "neg-shape-a", &self->distort->neg_shape_a);
+  btedb_properties_simple_add(self->props, "neg-shape-b", &self->distort->neg_shape_b);
+  btedb_properties_simple_add(self->props, "neg-shape-exp", &self->distort->neg_shape_exp);
   btedb_properties_simple_add(self->props, "db-postgain", &self->distort->db_postgain);
 
   // GST_AUDIO_RESAMPLER_FILTER_MODE_FULL is fastest, but uses the most memory.
