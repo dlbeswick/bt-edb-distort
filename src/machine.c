@@ -68,7 +68,8 @@ struct _BtEdbDistort {
 
 G_DEFINE_TYPE(BtEdbDistort, btedb_distort, GST_TYPE_BIN);
 
-static guint signal_bt_gfx_changed;
+static guint signal_bt_gfx_present;
+static guint signal_bt_gfx_invalidated;
 
 static gboolean plugin_init(GstPlugin* plugin) {
   GST_DEBUG_CATEGORY_INIT(
@@ -166,7 +167,9 @@ static void update_gfx(BtEdbDistort* self, void* callback) {
     }
   }
   
-  g_signal_emit(self, signal_bt_gfx_changed, 0, width, height, g_bytes_new(gfx, sizeof(gfx)));
+  GBytes* bytes = g_bytes_new(gfx, sizeof(gfx));
+  g_signal_emit(self, signal_bt_gfx_present, 0, width, height, bytes);
+  g_bytes_unref(bytes);
 }
 
 static void set_property (GObject* object, guint prop_id, const GValue* value, GParamSpec* pspec) {
@@ -174,7 +177,7 @@ static void set_property (GObject* object, guint prop_id, const GValue* value, G
   g_assert(self->props);
   btedb_properties_simple_set(self->props, pspec, value);
 
-  update_gfx(self, 0);
+  g_signal_emit(self, signal_bt_gfx_invalidated, 0);
 }
 
 static void get_property (GObject * object, guint prop_id, GValue * value, GParamSpec * pspec) {
@@ -375,33 +378,6 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
     g_object_class_install_property(
       aclass, idx++,
       g_param_spec_float("db-postgain", "Postgain dB", "Postgain dB", -144, 144, 0, flags));
-
-    signal_bt_gfx_changed = 
-      g_signal_new (
-        "bt-gfx-changed",
-        G_TYPE_FROM_CLASS (aclass),
-        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
-        0 /* offset */,
-        NULL /* accumulator */,
-        NULL /* accumulator data */,
-        NULL /* C marshaller */,
-        G_TYPE_NONE /* return_type */,
-        3     /* n_params */,
-        G_TYPE_UINT /* param width */,
-        G_TYPE_UINT /* param height */,
-        G_TYPE_BYTES /* param data */
-        );
-
-      g_signal_new (
-        "bt-gfx-refresh",
-        G_TYPE_FROM_CLASS (aclass),
-        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
-        0 /* offset */,
-        NULL /* accumulator */,
-        NULL /* accumulator data */,
-        NULL /* C marshaller */,
-        G_TYPE_NONE /* return_type */,
-        0     /* n_params */);
   }
 
   {
@@ -418,6 +394,45 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
       GST_ELEMENT_METADATA_DOC_URI,
       "file://" DATADIR "" G_DIR_SEPARATOR_S "Gear" G_DIR_SEPARATOR_S "" PACKAGE ".html");
   }
+
+  signal_bt_gfx_present = 
+    g_signal_new (
+      "bt-gfx-present",
+      G_TYPE_FROM_CLASS(klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+      0 /* offset */,
+      NULL /* accumulator */,
+      NULL /* accumulator data */,
+      NULL /* C marshaller */,
+      G_TYPE_NONE /* return_type */,
+      3     /* n_params */,
+      G_TYPE_UINT /* param width */,
+      G_TYPE_UINT /* param height */,
+      G_TYPE_BYTES /* param data */
+      );
+
+  signal_bt_gfx_invalidated =
+    g_signal_new (
+      "bt-gfx-invalidated",
+      G_TYPE_FROM_CLASS(klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+      0 /* offset */,
+      NULL /* accumulator */,
+      NULL /* accumulator data */,
+      NULL /* C marshaller */,
+      G_TYPE_NONE /* return_type */,
+      0     /* n_params */);
+  
+  g_signal_new (
+    "bt-gfx-request",
+    G_TYPE_FROM_CLASS(klass),
+    G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+    0 /* offset */,
+    NULL /* accumulator */,
+    NULL /* accumulator data */,
+    NULL /* C marshaller */,
+    G_TYPE_NONE /* return_type */,
+    0     /* n_params */);
 }
 
 static void btedb_distort_init(BtEdbDistort* const self) {
@@ -470,5 +485,5 @@ static void btedb_distort_init(BtEdbDistort* const self) {
     gst_object_unref(pad);
   }
 
-  g_signal_connect (self, "bt-gfx-refresh", G_CALLBACK (update_gfx), 0);
+  g_signal_connect (self, "bt-gfx-request", G_CALLBACK (update_gfx), 0);
 }
