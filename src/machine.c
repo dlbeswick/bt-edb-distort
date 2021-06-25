@@ -20,12 +20,17 @@
 #include "src/debug.h"
 #include "src/properties_simple.h"
 
+#include "libbuzztrax-gst/ui.h"
+
 #include <gst/gstbin.h>
 #include <gst/audio/audio-format.h>
 #include <gst/audio/audio-resampler.h>
 #include <gst/base/gstbasetransform.h>
 
 #include <math.h>
+
+#define GFX_WIDTH 64
+#define GFX_HEIGHT 64
 
 GST_DEBUG_CATEGORY(GST_CAT_DEFAULT);
 
@@ -64,11 +69,13 @@ struct _BtEdbDistort {
   GstElement* resample_in;
   GstElement* resample_out;
   BtEdbPropertiesSimple* props;
+
+  BtUiCustomGfx gfx;
+  guint32 gfx_data[GFX_WIDTH * GFX_HEIGHT];
 };
 
 G_DEFINE_TYPE(BtEdbDistort, btedb_distort, GST_TYPE_BIN);
 
-static guint signal_bt_gfx_present;
 static guint signal_bt_gfx_invalidated;
 
 static gboolean plugin_init(GstPlugin* plugin) {
@@ -141,35 +148,31 @@ static inline void distort(BtEdbDistortInternal* const self, gfloat* data, guint
   }
 }
 
-static void update_gfx(BtEdbDistort* self, void* callback) {
-  const int width = 64;
-  const int height = 64;
-  gfloat data_in[width];
-  u_int32_t gfx[width*height];
+static const BtUiCustomGfx* on_gfx_request(BtEdbDistort* self) {
+  gfloat data_in[GFX_WIDTH];
+  guint32* const gfx = self->gfx.data;
 
-  for (int i = 0; i < width*height; ++i) {
+  for (int i = 0; i < GFX_WIDTH*GFX_HEIGHT; ++i) {
     gfx[i] = 0x00000000;
   }
 
-  for (int i = 0; i < width; ++i) {
-    data_in[i] = -1.0f + 2 * ((gfloat)i/width);
+  for (int i = 0; i < GFX_WIDTH; ++i) {
+    data_in[i] = -1.0f + 2 * ((gfloat)i/GFX_WIDTH);
   }
 
-  distort(self->distort, data_in, width);
+  distort(self->distort, data_in, GFX_WIDTH);
   
-  for (int i = 1; i < width; ++i) {
+  for (int i = 1; i < GFX_WIDTH; ++i) {
     const gfloat val0 = 1.0f - ((data_in[i-1] + 1) / 2);
     const gfloat val1 = 1.0f - ((data_in[i] + 1) / 2);
-    const guint y0 = MAX(MIN((gint)(val0 * (height-1)), height-1), 0);
-    const guint y1 = MAX(MIN((gint)(val1 * (height-1)), height-1), 0);
+    const guint y0 = MAX(MIN((gint)(val0 * (GFX_HEIGHT-1)), GFX_HEIGHT-1), 0);
+    const guint y1 = MAX(MIN((gint)(val1 * (GFX_HEIGHT-1)), GFX_HEIGHT-1), 0);
     for (int y = MIN(y0,y1); y <= MAX(y0,y1); ++y) {
-      gfx[i + width * y] = 0xFF000000;
+      gfx[i + GFX_WIDTH * y] = 0xFF000000;
     }
   }
   
-  GBytes* bytes = g_bytes_new(gfx, sizeof(gfx));
-  g_signal_emit(self, signal_bt_gfx_present, 0, width, height, bytes);
-  g_bytes_unref(bytes);
+  return &self->gfx;
 }
 
 static void set_property (GObject* object, guint prop_id, const GValue* value, GParamSpec* pspec) {
@@ -395,27 +398,11 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
       "file://" DATADIR "" G_DIR_SEPARATOR_S "Gear" G_DIR_SEPARATOR_S "" PACKAGE ".html");
   }
 
-  signal_bt_gfx_present = 
-    g_signal_new (
-      "bt-gfx-present",
-      G_TYPE_FROM_CLASS(klass),
-      G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
-      0 /* offset */,
-      NULL /* accumulator */,
-      NULL /* accumulator data */,
-      NULL /* C marshaller */,
-      G_TYPE_NONE /* return_type */,
-      3     /* n_params */,
-      G_TYPE_UINT /* param width */,
-      G_TYPE_UINT /* param height */,
-      G_TYPE_BYTES /* param data */
-      );
-
   signal_bt_gfx_invalidated =
     g_signal_new (
       "bt-gfx-invalidated",
       G_TYPE_FROM_CLASS(klass),
-      G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+      G_SIGNAL_ACTION | G_SIGNAL_RUN_LAST,
       0 /* offset */,
       NULL /* accumulator */,
       NULL /* accumulator data */,
@@ -423,15 +410,15 @@ static void btedb_distort_class_init(BtEdbDistortClass* const klass) {
       G_TYPE_NONE /* return_type */,
       0     /* n_params */);
   
-  g_signal_new (
+  g_signal_new_class_handler (
     "bt-gfx-request",
     G_TYPE_FROM_CLASS(klass),
-    G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
-    0 /* offset */,
+    G_SIGNAL_ACTION | G_SIGNAL_RUN_LAST,
+    G_CALLBACK (on_gfx_request),
     NULL /* accumulator */,
     NULL /* accumulator data */,
     NULL /* C marshaller */,
-    G_TYPE_NONE /* return_type */,
+    G_TYPE_POINTER /* return_type */,
     0     /* n_params */);
 }
 
@@ -485,5 +472,5 @@ static void btedb_distort_init(BtEdbDistort* const self) {
     gst_object_unref(pad);
   }
 
-  g_signal_connect (self, "bt-gfx-request", G_CALLBACK (update_gfx), 0);
+  self->gfx = (struct BtUiCustomGfx){0, GFX_WIDTH, GFX_HEIGHT, self->gfx_data};
 }
