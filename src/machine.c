@@ -70,7 +70,7 @@ struct _BtEdbDistort {
   GstElement* resample_out;
   BtEdbPropertiesSimple* props;
 
-  BtUiCustomGfx gfx;
+  GstBtUiCustomGfxResponse gfx;
   guint32 gfx_data[GFX_WIDTH * GFX_HEIGHT];
 };
 
@@ -148,7 +148,7 @@ static inline void distort(BtEdbDistortInternal* const self, gfloat* data, guint
   }
 }
 
-static const BtUiCustomGfx* on_gfx_request(BtEdbDistort* self) {
+static const GstBtUiCustomGfxResponse* on_gfx_request(BtEdbDistort* self) {
   gfloat data_in[GFX_WIDTH];
   guint32* const gfx = self->gfx.data;
 
@@ -472,5 +472,5 @@ static void btedb_distort_init(BtEdbDistort* const self) {
     gst_object_unref(pad);
   }
 
-  self->gfx = (struct BtUiCustomGfx){0, GFX_WIDTH, GFX_HEIGHT, self->gfx_data};
+  self->gfx = (struct GstBtUiCustomGfxResponse){0, GFX_WIDTH, GFX_HEIGHT, self->gfx_data};
 }
